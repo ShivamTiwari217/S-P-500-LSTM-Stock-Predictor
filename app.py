@@ -404,8 +404,7 @@ def predict(model, pipeline, raw_df, seq_len=60):
         import streamlit as _st
         _st.warning(
             f"⚠️ Debug: pipeline.feature_columns has {len(pipe_cols)} entries "
-            f"(expected {expected}). Using {len(cols)} auto-detected cols instead.
-"
+            f"(expected {expected}). Using {len(cols)} auto-detected cols instead. "
             f"Auto cols: {cols}"
         )
 
