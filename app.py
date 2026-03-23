@@ -1,6 +1,6 @@
 """
 S&P 500 Direction Predictor — Streamlit App
-BiLSTM + Temporal Attention | Shivam Tiwari (065104)
+BiLSTM + Temporal Attention | Shivam Tiwari 
 """
 
 import warnings
@@ -69,14 +69,8 @@ div[data-testid="stSelectbox"] label, div[data-testid="stSlider"] label { color:
 </style>
 """, unsafe_allow_html=True)
 
-
 # ── DataPipeline stub ─────────────────────────────────────────────────────────
-# Defined BEFORE the unpickler so it's in scope everywhere.
-# The _SafeUnpickler below intercepts ALL module paths for this class name,
-# so it doesn't matter whether the .pkl was saved from __main__, __mp_main__,
-# ipykernel_launcher, or any Colab cell context.
 class DataPipeline:
-    """Minimal stub — matches the Colab DataPipeline attributes pickle needs."""
     def __init__(self, cfg=None):
         self.feature_scaler  = RobustScaler()
         self.feature_columns = []
@@ -84,12 +78,8 @@ class DataPipeline:
     def split_and_scale(self, *a, **kw):
         raise NotImplementedError
 
-
-# Stubs for every dataclass the notebook saved into pipeline.pkl
 class DataConfig:
-    """Stub for the DataConfig dataclass saved inside pipeline.pkl."""
     def __init__(self, **kwargs):
-        # Set all known DataConfig fields with defaults
         self.ticker      = kwargs.get("ticker",      "^GSPC")
         self.start_date  = kwargs.get("start_date",  "1986-01-01")
         self.end_date    = kwargs.get("end_date",     "2024-12-31")
@@ -134,7 +124,6 @@ class Config:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-# Register all stubs in every module name pickle might use
 _STUB_CLASSES = {
     "DataPipeline": DataPipeline,
     "DataConfig":   DataConfig,
@@ -148,19 +137,15 @@ for _mod_name in ("__main__", "__mp_main__", "app", "streamlit_app"):
     for _cls_name, _cls in _STUB_CLASSES.items():
         setattr(sys.modules[_mod_name], _cls_name, _cls)
 
-
 class _SafeUnpickler(pickle.Unpickler):
-    """Intercepts class lookup for ANY class from the Colab notebook."""
     def find_class(self, module, name):
         if name in _STUB_CLASSES:
             return _STUB_CLASSES[name]
         return super().find_class(module, name)
 
-
 def safe_load_pickle(path):
     with open(path, "rb") as f:
         return _SafeUnpickler(f).load()
-
 
 # ── PyTorch model ─────────────────────────────────────────────────────────────
 class TemporalAttention(nn.Module):
@@ -173,7 +158,6 @@ class TemporalAttention(nn.Module):
         weights = F.softmax(scores, dim=-1)
         context = torch.bmm(weights.unsqueeze(1), lstm_out).squeeze(1)
         return context, weights
-
 
 class LSTMStockPredictor(nn.Module):
     def __init__(self, input_size, hidden_size=64, num_layers=2,
@@ -200,10 +184,8 @@ class LSTMStockPredictor(nn.Module):
         context, w  = self.attention(lstm_out)
         return self.head(context), w
 
-
 # ── Feature engineering ───────────────────────────────────────────────────────
-# Column names match pipeline.feature_columns exactly as saved in pipeline.pkl
-def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def add_technical_indicators(df: pd.DataFrame, expected_cols: list = None) -> pd.DataFrame:
     df    = df.copy()
     close = df["Close"]
     high  = df["High"]
@@ -255,24 +237,22 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         (low  - close.shift()).abs(),
     ], axis=1).max(axis=1)
     atr14 = tr.rolling(14).mean()
-    df["ATR_14_norm"] = atr14 / (close + 1e-10)   # original name (kept for compat)
-    df["ATR_pct"]     = atr14 / (close + 1e-10)   # pipeline.pkl name
+    df["ATR_14_norm"] = atr14 / (close + 1e-10)
+    df["ATR_pct"]     = atr14 / (close + 1e-10)
 
     # ── Volume ───────────────────────────────────────────────────────────────
     vol_sma20         = vol.rolling(20).mean()
     df["VOL_SMA20"]   = vol_sma20
-    df["VOL_ratio"]   = vol / (vol_sma20 + 1e-10)   # original name
-    df["Volume_Ratio"]= vol / (vol_sma20 + 1e-10)   # pipeline.pkl name
-    df["Volume_Change"]= vol.pct_change(1)            # pipeline.pkl name
+    df["VOL_ratio"]   = vol / (vol_sma20 + 1e-10)
+    df["Volume_Ratio"]= vol / (vol_sma20 + 1e-10)
+    df["Volume_Change"]= vol.pct_change(1)
 
     df["OBV"]         = (np.sign(close.diff()) * vol).cumsum()
     df["OBV_norm"]    = df["OBV"] / (df["OBV"].abs().rolling(20).mean() + 1e-10)
 
-    # Chaikin Money Flow (CMF_20)
     mfv = ((close - low) - (high - close)) / (high - low + 1e-10) * vol
     df["CMF_20"] = mfv.rolling(20).sum() / (vol.rolling(20).sum() + 1e-10)
 
-    # Money Flow Index (MFI_14)
     typical_price   = tp
     raw_money_flow  = typical_price * vol
     tp_change       = typical_price.diff()
@@ -299,22 +279,39 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["Month"]       = pd.to_datetime(df.index).month / 11
     df["Quarter"]     = pd.to_datetime(df.index).quarter / 3
 
+    # ── Dynamic Missing Feature Generation ───────────────────────────────────
+    # Dynamically injects the missing features expected by the scaler (e.g., Return_21d, HL_Spread)
+    if expected_cols:
+        for c in expected_cols:
+            if c not in df.columns:
+                if c.startswith("Return_") and c.endswith("d"):
+                    try:
+                        period = int(c.split("_")[1].replace("d", ""))
+                        df[c] = close.pct_change(period)
+                    except ValueError: pass
+                elif c.startswith("Log_Return_") and c.endswith("d"):
+                    try:
+                        period = int(c.split("_")[2].replace("d", ""))
+                        df[c] = np.log(close / close.shift(period))
+                    except ValueError: pass
+                elif c.startswith("Volatility_"):
+                    try:
+                        period = int(c.split("_")[1])
+                        df[c] = df["Return_1d"].rolling(period).std()
+                    except ValueError: pass
+                elif c.startswith("Volume_Change_") and c.endswith("d"):
+                    try:
+                        period = int(c.split("_")[2].replace("d", ""))
+                        df[c] = vol.pct_change(period)
+                    except ValueError: pass
+                elif c == "HL_Spread":
+                    df[c] = (high - low) / (close + 1e-10)
+                elif c == "OC_Spread":
+                    df[c] = (close - df.get("Open", close)) / (df.get("Open", close) + 1e-10)
+                else:
+                    df[c] = 0.0 # Safety fallback to prevent scaler crash
+
     return df
-
-
-FEATURE_COLS = [
-    "Price_vs_EMA9","Price_vs_EMA21","Price_vs_EMA50",
-    "EMA9_vs_EMA21","EMA21_vs_EMA50",
-    "RSI_14","MACD_norm","MACDs_norm","MACDh_norm",
-    "STOCHk","STOCHd","ROC_5","ROC_10","CCI_20","WILLR_14",
-    "BBP","BBW","ATR_14_norm",
-    "VOL_ratio","OBV_norm",
-    "Return_1d","Return_5d","Return_20d",
-    "Volatility_20","Volatility_5",
-    "Dist_52w_high","Dist_52w_low",
-    "Day_of_week","Month","Quarter",
-]
-
 
 # ── Data fetching ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
@@ -322,7 +319,7 @@ def fetch_data(period: str = "2y") -> pd.DataFrame:
     last_err = None
     for attempt in range(4):
         try:
-            raw = yf.download(
+            raw = yfinance.download(
                 "^GSPC", period=period,
                 auto_adjust=True, progress=False,
                 multi_level_index=False,
@@ -341,7 +338,6 @@ def fetch_data(period: str = "2y") -> pd.DataFrame:
         "yfinance may be rate-limiting this server — try again in a few minutes."
     )
     return pd.DataFrame()
-
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -369,10 +365,9 @@ def load_artifacts():
         with open(config_path) as f:
             config = json.load(f)
 
-        # Use our safe unpickler — intercepts DataPipeline from any module
         pipeline = safe_load_pickle(pipeline_path)
 
-        input_size  = config["model"]["input_size"] or len(FEATURE_COLS)
+        input_size  = config["model"]["input_size"]
         hidden_size = config["model"]["hidden_size"]
         num_layers  = config["model"]["num_layers"]
         dropout     = config["model"]["dropout"]
@@ -388,30 +383,21 @@ def load_artifacts():
         model.load_state_dict(state)
         model.eval()
 
-        # Debug: log feature_columns so we can see what the pkl actually stored
-        pipe_cols = getattr(pipeline, "feature_columns", [])
-        print(f"[DEBUG] pipeline.feature_columns ({len(pipe_cols)}): {pipe_cols}")
-
         return model, pipeline, config, None
 
     except Exception as e:
         return None, None, None, str(e)
 
-
 # ── Inference ─────────────────────────────────────────────────────────────────
 @torch.no_grad()
 def predict(model, pipeline, raw_df, seq_len=60):
-    feat_df = add_technical_indicators(raw_df.copy()).dropna()
-
-    # Log what pipeline.feature_columns actually contains
     pipe_cols = getattr(pipeline, "feature_columns", [])
     expected  = getattr(pipeline.feature_scaler, "n_features_in_", 44)
 
-    # Strategy: use pipeline.feature_columns if it has the right count,
-    # otherwise fall back to ALL numeric columns from feat_df (excluding
-    # raw OHLCV and intermediate cols) in whatever order they were computed
+    # Pass the expected cols to dynamically create any missing variables
+    feat_df = add_technical_indicators(raw_df.copy(), pipe_cols).dropna()
+
     if pipe_cols and len(pipe_cols) == expected:
-        # Ideal path: pipeline tells us exactly which cols it needs
         missing_from_data = [c for c in pipe_cols if c not in feat_df.columns]
         if missing_from_data:
             return None, None, (
@@ -420,13 +406,10 @@ def predict(model, pipeline, raw_df, seq_len=60):
             )
         cols = pipe_cols
     else:
-        # Fallback: use all numeric cols from feat_df that aren't raw OHLCV
-        # This matches what the notebook's clean_features() + get_feature_target() did
         exclude = {"Open", "High", "Low", "Close", "Volume", "Return_1d"}
         cols = [c for c in feat_df.columns
                 if c not in exclude
                 and pd.api.types.is_numeric_dtype(feat_df[c])]
-        # Log for debugging
         import streamlit as _st
         _st.warning(
             f"⚠️ Debug: pipeline.feature_columns has {len(pipe_cols)} entries "
@@ -454,14 +437,12 @@ def predict(model, pipeline, raw_df, seq_len=60):
     prob_up = torch.sigmoid(logit).item()
     return prob_up, attn_w.squeeze(0).numpy(), None
 
-
 def confidence_label(prob):
     diff = abs(prob - 0.5)
     if diff < 0.02: return "Very Low Confidence", "#f59e0b"
     if diff < 0.04: return "Low Confidence",       "#f97316"
     if diff < 0.07: return "Moderate Confidence",  "#3b82f6"
     return                  "High Confidence",      "#10b981"
-
 
 # ── Charts ────────────────────────────────────────────────────────────────────
 def make_price_chart(df, days=120):
@@ -485,7 +466,6 @@ def make_price_chart(df, days=120):
     )
     return fig
 
-
 def make_attention_chart(attn, seq_len=60):
     tick_vals = list(range(0, seq_len, 5))
     tick_text = [f"t-{seq_len - i - 1}" for i in tick_vals]
@@ -505,7 +485,6 @@ def make_attention_chart(attn, seq_len=60):
         margin=dict(l=0, r=0, t=10, b=0), height=180,
     )
     return fig
-
 
 def make_gauge(prob):
     color = "#10b981" if prob >= 0.5 else "#ef4444"
@@ -528,7 +507,6 @@ def make_gauge(prob):
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#94a3b8"),
                       margin=dict(l=20, r=20, t=20, b=20), height=220)
     return fig
-
 
 # ── App layout ────────────────────────────────────────────────────────────────
 def main():
@@ -653,7 +631,7 @@ def main():
                 if show_indic:
                     st.markdown("<div class='section-header'>CURRENT INDICATOR SNAPSHOT</div>",
                                 unsafe_allow_html=True)
-                    feat_df = add_technical_indicators(raw_df.copy()).dropna()
+                    feat_df = add_technical_indicators(raw_df.copy(), getattr(pipeline, "feature_columns", [])).dropna()
                     latest  = feat_df.iloc[-1]
                     ic1, ic2, ic3, ic4, ic5 = st.columns(5)
                     for col, lbl, val, sub in [
@@ -689,7 +667,6 @@ def main():
         st.info("📁 Add your model artifacts to enable predictions.\n\n"
                 "Required files: `best_model.pt`, `pipeline.pkl`, `config.json`\n\n"
                 f"Debug — load error: `{err}`")
-
 
 if __name__ == "__main__":
     main()
