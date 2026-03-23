@@ -397,12 +397,22 @@ def fetch_data(period: str = "2y") -> pd.DataFrame:
 # ── Model loading ─────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_artifacts():
-    model_path    = Path("best_model.pt")
-    pipeline_path = Path("pipeline.pkl")
-    config_path   = Path("config.json")
+    # Search for artifacts in root first, then model/ subfolder
+    def find(filename):
+        for p in [Path(filename), Path("model") / filename]:
+            if p.exists():
+                return p
+        return None
 
-    if not model_path.exists():
-        return None, None, None, "Model files not found in model/ directory."
+    model_path    = find("best_model.pt")
+    pipeline_path = find("pipeline.pkl") or find("pipeline .pkl")  # handle space variant
+    config_path   = find("config.json")
+
+    missing = [n for n, p in [("best_model.pt", model_path),
+                               ("pipeline.pkl",  pipeline_path),
+                               ("config.json",   config_path)] if p is None]
+    if missing:
+        return None, None, None, f"Missing files: {', '.join(missing)}. Checked root and model/ folder."
 
     try:
         with open(config_path) as f:
@@ -422,7 +432,7 @@ def load_artifacts():
             num_layers=num_layers,
             dropout=dropout,
         )
-        ckpt = torch.load(model_path, map_location="cpu")
+        ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
         state = ckpt.get("model_state_dict", ckpt)
         model.load_state_dict(state)
         model.eval()
@@ -644,7 +654,8 @@ def main():
         (c2, "Day Return",    f"{day_return:+.2f}%",
          "▲ positive" if day_return >= 0 else "▼ negative"),
         (c3, "Data Points",   f"{len(raw_df):,}", "trading days loaded"),
-        (c4, "Model Status",  "READY" if model else "NO MODEL", "artifacts loaded" if model else "add to model/"),
+        (c4, "Model Status",  "READY" if model else "NO MODEL",
+         "artifacts loaded" if model else (err[:40] + "…" if err and len(err) > 40 else err or "check files")),
     ]
     for col, label, value, sub in metrics:
         with col:
