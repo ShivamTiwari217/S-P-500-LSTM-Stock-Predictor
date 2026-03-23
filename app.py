@@ -1,6 +1,6 @@
 """
 S&P 500 Direction Predictor — Streamlit App
-BiLSTM + Temporal Attention | Shivam Tiwari (065104)
+BiLSTM + Temporal Attention | Shivam Tiwari 
 """
 
 import warnings
@@ -258,6 +258,22 @@ class LSTMStockPredictor(nn.Module):
         return self.head(context), w
 
 
+# ── DataPipeline stub — required for unpickling pipeline.pkl ─────────────────
+# pickle reconstructs the saved object using the class it was originally saved
+# with. This stub matches the Colab notebook's DataPipeline structure exactly.
+from sklearn.preprocessing import RobustScaler as _RS
+from typing import List as _List
+
+class DataPipeline:
+    """Minimal stub so pickle can deserialise the saved pipeline object."""
+    def __init__(self, cfg=None):
+        self.feature_scaler   = _RS()
+        self.feature_columns: _List[str] = []
+
+    def split_and_scale(self, *args, **kwargs):
+        raise NotImplementedError("Not available at inference time.")
+
+
 # ── Feature engineering (mirrors notebook exactly) ───────────────────────────
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df    = df.copy()
@@ -349,29 +365,41 @@ FEATURE_COLS = [
 # ── Data fetching with retry ──────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def fetch_data(period: str = "2y") -> pd.DataFrame:
-    for attempt in range(3):
+    last_err = None
+    for attempt in range(4):
         try:
-            raw = yf.download("^GSPC", period=period,
-                              auto_adjust=True, progress=False,
-                              multi_level_index=False)
+            raw = yf.download(
+                "^GSPC", period=period,
+                auto_adjust=True, progress=False,
+                multi_level_index=False,
+            )
             if raw.empty:
-                raise ValueError("Empty dataframe returned")
+                raise ValueError("Empty dataframe returned from yfinance.")
             raw.columns = [c.capitalize() for c in raw.columns]
-            raw = raw[["Open","High","Low","Close","Volume"]].dropna()
+            raw = raw[["Open", "High", "Low", "Close", "Volume"]].dropna()
             return raw
         except Exception as e:
-            if attempt == 2:
-                st.error(f"Failed to fetch data after 3 attempts: {e}")
-                return pd.DataFrame()
-            time.sleep(2)
+            last_err = e
+            is_rate_limit = any(k in str(e) for k in ["Rate", "429", "Too Many"])
+            wait = (5 * (attempt + 1)) if is_rate_limit else 2
+            if attempt < 3:
+                time.sleep(wait)
+
+    st.warning(
+        f"⚠️ Could not fetch live data after 4 attempts: `{last_err}`\n\n"
+        "The app will retry on your next interaction. "
+        "If this persists, yfinance may be rate-limiting Streamlit's shared IP — "
+        "try again in a few minutes."
+    )
+    return pd.DataFrame()
 
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_artifacts():
-    model_path    = Path("best_model.pt")
-    pipeline_path = Path("pipeline.pkl")
-    config_path   = Path("config.json")
+    model_path    = Path("model/best_model.pt")
+    pipeline_path = Path("model/pipeline.pkl")
+    config_path   = Path("model/config.json")
 
     if not model_path.exists():
         return None, None, None, "Model files not found in model/ directory."
@@ -591,7 +619,7 @@ def main():
         </p>
         """, unsafe_allow_html=True)
 
-        run_btn = st.button("▶  RUN PREDICTION", use_container_width=True)
+        run_btn = st.button("▶  RUN PREDICTION", use_container_width=True)  # sidebar button — fine to keep
 
     # Load model
     model, pipeline, config, err = load_artifacts()
@@ -637,8 +665,7 @@ def main():
     # ── Price chart ───────────────────────────────────────────────────────────
     st.markdown("<div class='section-header'>PRICE HISTORY</div>",
                 unsafe_allow_html=True)
-    st.plotly_chart(make_price_chart(raw_df, chart_days),
-                    use_container_width=True)
+    st.plotly_chart(make_price_chart(raw_df, chart_days), width="stretch")
 
     # ── Prediction ────────────────────────────────────────────────────────────
     if run_btn or st.session_state.get("has_prediction"):
@@ -686,7 +713,7 @@ def main():
                     """, unsafe_allow_html=True)
 
                 with gauge_col:
-                    st.plotly_chart(make_gauge(prob_up), use_container_width=True)
+                    st.plotly_chart(make_gauge(prob_up), width="stretch")
 
                 # Attention weights
                 if show_attn and attn is not None:
@@ -697,7 +724,7 @@ def main():
                         "Higher bars = more influence on this prediction."
                     )
                     st.plotly_chart(make_attention_chart(attn, seq_len),
-                                   use_container_width=True)
+                                   width="stretch")
 
                 # Indicators panel
                 if show_indic:
