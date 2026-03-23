@@ -397,9 +397,9 @@ def fetch_data(period: str = "2y") -> pd.DataFrame:
 # ── Model loading ─────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_artifacts():
-    model_path    = Path("model/best_model.pt")
-    pipeline_path = Path("model/pipeline.pkl")
-    config_path   = Path("model/config.json")
+    model_path    = Path("best_model.pt")
+    pipeline_path = Path("pipeline.pkl")
+    config_path   = Path("config.json")
 
     if not model_path.exists():
         return None, None, None, "Model files not found in model/ directory."
