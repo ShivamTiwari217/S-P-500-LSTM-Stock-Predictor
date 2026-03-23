@@ -202,6 +202,7 @@ class LSTMStockPredictor(nn.Module):
 
 
 # ── Feature engineering ───────────────────────────────────────────────────────
+# Column names match pipeline.feature_columns exactly as saved in pipeline.pkl
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df    = df.copy()
     close = df["Close"]
@@ -210,6 +211,7 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     vol   = df["Volume"]
     tp    = (high + low + close) / 3
 
+    # ── Trend ────────────────────────────────────────────────────────────────
     for n in [9, 21, 50, 200]:
         df[f"EMA_{n}"] = close.ewm(span=n, adjust=False).mean()
     df["Price_vs_EMA9"]  = (close / df["EMA_9"])  - 1
@@ -218,6 +220,7 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["EMA9_vs_EMA21"]  = (df["EMA_9"]  / df["EMA_21"]) - 1
     df["EMA21_vs_EMA50"] = (df["EMA_21"] / df["EMA_50"]) - 1
 
+    # ── Momentum ─────────────────────────────────────────────────────────────
     delta = close.diff()
     gain  = delta.clip(lower=0).rolling(14).mean()
     loss  = (-delta.clip(upper=0)).rolling(14).mean()
@@ -240,6 +243,7 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
                       (0.015 * tp.rolling(20).std() + 1e-10)) / 100
     df["WILLR_14"] = (high14 - close) / (high14 - low14 + 1e-10)
 
+    # ── Volatility ───────────────────────────────────────────────────────────
     sma20 = close.rolling(20).mean()
     std20 = close.rolling(20).std()
     df["BBP"] = (close - (sma20 - 2*std20)) / (4*std20 + 1e-10)
@@ -250,13 +254,33 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         (high - close.shift()).abs(),
         (low  - close.shift()).abs(),
     ], axis=1).max(axis=1)
-    df["ATR_14_norm"] = tr.rolling(14).mean() / (close + 1e-10)
+    atr14 = tr.rolling(14).mean()
+    df["ATR_14_norm"] = atr14 / (close + 1e-10)   # original name (kept for compat)
+    df["ATR_pct"]     = atr14 / (close + 1e-10)   # pipeline.pkl name
 
-    df["VOL_SMA20"]   = vol.rolling(20).mean()
-    df["VOL_ratio"]   = vol / (df["VOL_SMA20"] + 1e-10)
+    # ── Volume ───────────────────────────────────────────────────────────────
+    vol_sma20         = vol.rolling(20).mean()
+    df["VOL_SMA20"]   = vol_sma20
+    df["VOL_ratio"]   = vol / (vol_sma20 + 1e-10)   # original name
+    df["Volume_Ratio"]= vol / (vol_sma20 + 1e-10)   # pipeline.pkl name
+    df["Volume_Change"]= vol.pct_change(1)            # pipeline.pkl name
+
     df["OBV"]         = (np.sign(close.diff()) * vol).cumsum()
     df["OBV_norm"]    = df["OBV"] / (df["OBV"].abs().rolling(20).mean() + 1e-10)
 
+    # Chaikin Money Flow (CMF_20)
+    mfv = ((close - low) - (high - close)) / (high - low + 1e-10) * vol
+    df["CMF_20"] = mfv.rolling(20).sum() / (vol.rolling(20).sum() + 1e-10)
+
+    # Money Flow Index (MFI_14)
+    typical_price   = tp
+    raw_money_flow  = typical_price * vol
+    tp_change       = typical_price.diff()
+    pos_mf = raw_money_flow.where(tp_change > 0, 0).rolling(14).sum()
+    neg_mf = raw_money_flow.where(tp_change < 0, 0).rolling(14).sum()
+    df["MFI_14"] = 100 - (100 / (1 + pos_mf / (neg_mf + 1e-10)))
+
+    # ── Returns & Volatility ─────────────────────────────────────────────────
     df["Return_1d"]     = close.pct_change(1)
     df["Return_5d"]     = close.pct_change(5)
     df["Return_20d"]    = close.pct_change(20)
@@ -264,11 +288,13 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["Volatility_20"] = df["Return_1d"].rolling(20).std()
     df["Volatility_5"]  = df["Return_1d"].rolling(5).std()
 
+    # ── Price position ───────────────────────────────────────────────────────
     high_52w = close.rolling(252).max()
     low_52w  = close.rolling(252).min()
     df["Dist_52w_high"] = (close - high_52w) / (high_52w + 1e-10)
     df["Dist_52w_low"]  = (close - low_52w)  / (low_52w  + 1e-10)
 
+    # ── Time features ────────────────────────────────────────────────────────
     df["Day_of_week"] = pd.to_datetime(df.index).dayofweek / 4
     df["Month"]       = pd.to_datetime(df.index).month / 11
     df["Quarter"]     = pd.to_datetime(df.index).quarter / 3
