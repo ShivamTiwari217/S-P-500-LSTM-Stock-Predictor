@@ -319,7 +319,7 @@ def fetch_data(period: str = "2y") -> pd.DataFrame:
     last_err = None
     for attempt in range(4):
         try:
-            raw = yfinance.download(
+            raw = yf.download(
                 "^GSPC", period=period,
                 auto_adjust=True, progress=False,
                 multi_level_index=False,
