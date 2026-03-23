@@ -260,6 +260,7 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["Return_1d"]     = close.pct_change(1)
     df["Return_5d"]     = close.pct_change(5)
     df["Return_20d"]    = close.pct_change(20)
+    df["Log_Return_1d"] = np.log(close / close.shift(1))
     df["Volatility_20"] = df["Return_1d"].rolling(20).std()
     df["Volatility_5"]  = df["Return_1d"].rolling(5).std()
 
@@ -326,7 +327,7 @@ def load_artifacts():
         return None
 
     model_path    = find("best_model.pt")
-    pipeline_path = find("pipeline.pkl") 
+    pipeline_path = find("pipeline.pkl") or find("pipeline .pkl")
     config_path   = find("config.json")
 
     missing = [n for n, p in [
@@ -369,14 +370,36 @@ def load_artifacts():
 # ── Inference ─────────────────────────────────────────────────────────────────
 @torch.no_grad()
 def predict(model, pipeline, raw_df, seq_len=60):
-    feat_df   = add_technical_indicators(raw_df.copy()).dropna()
-    available = [c for c in FEATURE_COLS if c in feat_df.columns]
-    X         = feat_df[available].values
+    feat_df = add_technical_indicators(raw_df.copy()).dropna()
+
+    # Use pipeline.feature_columns (the exact 44-col list the scaler was fit on)
+    # falling back to FEATURE_COLS only if not available
+    cols = (pipeline.feature_columns
+            if hasattr(pipeline, "feature_columns") and pipeline.feature_columns
+            else FEATURE_COLS)
+
+    # Only keep cols that actually exist in feat_df
+    cols = [c for c in cols if c in feat_df.columns]
+
+    if not cols:
+        return None, None, "No matching feature columns found in data."
+
+    X = feat_df[cols].values
 
     if len(X) < seq_len:
         return None, None, f"Need ≥{seq_len} rows, got {len(X)}."
 
     window = X[-seq_len:]
+
+    # Validate feature count matches scaler expectation
+    expected = getattr(pipeline.feature_scaler, "n_features_in_", None)
+    if expected and window.shape[1] != expected:
+        return None, None, (
+            f"Feature mismatch: data has {window.shape[1]} cols, "
+            f"scaler expects {expected}. "
+            f"pipeline.feature_columns has {len(pipeline.feature_columns)} entries."
+        )
+
     scaled = pipeline.feature_scaler.transform(window)
     tensor = torch.tensor(scaled, dtype=torch.float32).unsqueeze(0)
 
