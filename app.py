@@ -85,18 +85,75 @@ class DataPipeline:
         raise NotImplementedError
 
 
-# Register in every plausible module name pickle might look in
+# Stubs for every dataclass the notebook saved into pipeline.pkl
+class DataConfig:
+    """Stub for the DataConfig dataclass saved inside pipeline.pkl."""
+    def __init__(self, **kwargs):
+        # Set all known DataConfig fields with defaults
+        self.ticker      = kwargs.get("ticker",      "^GSPC")
+        self.start_date  = kwargs.get("start_date",  "1986-01-01")
+        self.end_date    = kwargs.get("end_date",     "2024-12-31")
+        self.interval    = kwargs.get("interval",     "1d")
+        self.seq_len     = kwargs.get("seq_len",      60)
+        self.train_ratio = kwargs.get("train_ratio",  0.80)
+        self.val_ratio   = kwargs.get("val_ratio",    0.10)
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+class ModelConfig:
+    def __init__(self, **kwargs):
+        self.input_size    = kwargs.get("input_size",   0)
+        self.hidden_size   = kwargs.get("hidden_size",  64)
+        self.num_layers    = kwargs.get("num_layers",   2)
+        self.dropout       = kwargs.get("dropout",      0.3)
+        self.bidirectional = kwargs.get("bidirectional",False)
+        self.output_size   = kwargs.get("output_size",  1)
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+class TrainConfig:
+    def __init__(self, **kwargs):
+        self.epochs        = kwargs.get("epochs",        200)
+        self.batch_size    = kwargs.get("batch_size",    32)
+        self.learning_rate = kwargs.get("learning_rate", 1e-3)
+        self.weight_decay  = kwargs.get("weight_decay",  1e-3)
+        self.patience      = kwargs.get("patience",      30)
+        self.gradient_clip = kwargs.get("gradient_clip", 0.5)
+        self.seed          = kwargs.get("seed",          42)
+        self.device        = kwargs.get("device",        "auto")
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+class Config:
+    def __init__(self, **kwargs):
+        self.data           = kwargs.get("data",           DataConfig())
+        self.model          = kwargs.get("model",          ModelConfig())
+        self.train          = kwargs.get("train",          TrainConfig())
+        self.checkpoint_dir = kwargs.get("checkpoint_dir", "/content/checkpoints")
+        self.results_dir    = kwargs.get("results_dir",    "/content/results")
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+# Register all stubs in every module name pickle might use
+_STUB_CLASSES = {
+    "DataPipeline": DataPipeline,
+    "DataConfig":   DataConfig,
+    "ModelConfig":  ModelConfig,
+    "TrainConfig":  TrainConfig,
+    "Config":       Config,
+}
 for _mod_name in ("__main__", "__mp_main__", "app", "streamlit_app"):
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = type(sys)(_mod_name)
-    sys.modules[_mod_name].DataPipeline = DataPipeline
+    for _cls_name, _cls in _STUB_CLASSES.items():
+        setattr(sys.modules[_mod_name], _cls_name, _cls)
 
 
 class _SafeUnpickler(pickle.Unpickler):
-    """Intercepts class lookup: any module + 'DataPipeline' → our stub."""
+    """Intercepts class lookup for ANY class from the Colab notebook."""
     def find_class(self, module, name):
-        if name == "DataPipeline":
-            return DataPipeline
+        if name in _STUB_CLASSES:
+            return _STUB_CLASSES[name]
         return super().find_class(module, name)
 
 
@@ -268,9 +325,9 @@ def load_artifacts():
                 return p
         return None
 
-    model_path    = find("best_model (2).pt")
-    pipeline_path = find("pipeline (2).pkl") or find("pipeline .pkl")
-    config_path   = find("config (2).json")
+    model_path    = find("best_model.pt")
+    pipeline_path = find("pipeline.pkl") 
+    config_path   = find("config.json")
 
     missing = [n for n, p in [
         ("best_model.pt", model_path),
