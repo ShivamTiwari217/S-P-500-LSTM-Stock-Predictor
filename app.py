@@ -1,6 +1,6 @@
 """
 S&P 500 Direction Predictor — Streamlit App
-BiLSTM + Temporal Attention | Shivam Tiwari 
+BiLSTM + Temporal Attention | Shivam Tiwari
 """
 
 import warnings
@@ -261,6 +261,10 @@ class LSTMStockPredictor(nn.Module):
 # ── DataPipeline stub — required for unpickling pipeline.pkl ─────────────────
 # pickle reconstructs the saved object using the class it was originally saved
 # with. This stub matches the Colab notebook's DataPipeline structure exactly.
+# We also inject it into sys.modules['__main__'] because Streamlit runs app.py
+# as __main__ during development but as a named module in the cloud runner —
+# pickle always looks up classes in __main__, so we register it in both places.
+import sys
 from sklearn.preprocessing import RobustScaler as _RS
 from typing import List as _List
 
@@ -272,6 +276,12 @@ class DataPipeline:
 
     def split_and_scale(self, *args, **kwargs):
         raise NotImplementedError("Not available at inference time.")
+
+# Force registration in __main__ so pickle can always find it
+sys.modules[__name__].DataPipeline = DataPipeline
+if "__main__" not in sys.modules:
+    sys.modules["__main__"] = sys.modules[__name__]
+sys.modules["__main__"].DataPipeline = DataPipeline
 
 
 # ── Feature engineering (mirrors notebook exactly) ───────────────────────────
@@ -418,8 +428,16 @@ def load_artifacts():
         with open(config_path) as f:
             config = json.load(f)
 
+        # Custom unpickler: redirects any __main__.DataPipeline lookup
+        # to our stub regardless of how Streamlit names the running module.
+        class _SafeUnpickler(pickle.Unpickler):
+            def find_class(self, module, name):
+                if name == "DataPipeline":
+                    return DataPipeline
+                return super().find_class(module, name)
+
         with open(pipeline_path, "rb") as f:
-            pipeline = pickle.load(f)
+            pipeline = _SafeUnpickler(f).load()
 
         input_size  = config["model"]["input_size"] or len(FEATURE_COLS)
         hidden_size = config["model"]["hidden_size"]
