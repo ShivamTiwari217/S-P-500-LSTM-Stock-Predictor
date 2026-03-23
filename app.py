@@ -268,9 +268,9 @@ def load_artifacts():
                 return p
         return None
 
-    model_path    = find("best_model.pt")
-    pipeline_path = find("pipeline.pkl") or find("pipeline .pkl")
-    config_path   = find("config.json")
+    model_path    = find("best_model (2).pt")
+    pipeline_path = find("pipeline (2).pkl") or find("pipeline .pkl")
+    config_path   = find("config (2).json")
 
     missing = [n for n, p in [
         ("best_model.pt", model_path),
