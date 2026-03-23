@@ -361,6 +361,11 @@ def load_artifacts():
         state = ckpt.get("model_state_dict", ckpt)
         model.load_state_dict(state)
         model.eval()
+
+        # Debug: log feature_columns so we can see what the pkl actually stored
+        pipe_cols = getattr(pipeline, "feature_columns", [])
+        print(f"[DEBUG] pipeline.feature_columns ({len(pipe_cols)}): {pipe_cols}")
+
         return model, pipeline, config, None
 
     except Exception as e:
@@ -372,17 +377,37 @@ def load_artifacts():
 def predict(model, pipeline, raw_df, seq_len=60):
     feat_df = add_technical_indicators(raw_df.copy()).dropna()
 
-    # Use pipeline.feature_columns (the exact 44-col list the scaler was fit on)
-    # falling back to FEATURE_COLS only if not available
-    cols = (pipeline.feature_columns
-            if hasattr(pipeline, "feature_columns") and pipeline.feature_columns
-            else FEATURE_COLS)
+    # Log what pipeline.feature_columns actually contains
+    pipe_cols = getattr(pipeline, "feature_columns", [])
+    expected  = getattr(pipeline.feature_scaler, "n_features_in_", 44)
 
-    # Only keep cols that actually exist in feat_df
-    cols = [c for c in cols if c in feat_df.columns]
-
-    if not cols:
-        return None, None, "No matching feature columns found in data."
+    # Strategy: use pipeline.feature_columns if it has the right count,
+    # otherwise fall back to ALL numeric columns from feat_df (excluding
+    # raw OHLCV and intermediate cols) in whatever order they were computed
+    if pipe_cols and len(pipe_cols) == expected:
+        # Ideal path: pipeline tells us exactly which cols it needs
+        missing_from_data = [c for c in pipe_cols if c not in feat_df.columns]
+        if missing_from_data:
+            return None, None, (
+                f"pipeline.feature_columns references {len(missing_from_data)} cols "
+                f"not in computed data: {missing_from_data[:5]}..."
+            )
+        cols = pipe_cols
+    else:
+        # Fallback: use all numeric cols from feat_df that aren't raw OHLCV
+        # This matches what the notebook's clean_features() + get_feature_target() did
+        exclude = {"Open", "High", "Low", "Close", "Volume", "Return_1d"}
+        cols = [c for c in feat_df.columns
+                if c not in exclude
+                and pd.api.types.is_numeric_dtype(feat_df[c])]
+        # Log for debugging
+        import streamlit as _st
+        _st.warning(
+            f"⚠️ Debug: pipeline.feature_columns has {len(pipe_cols)} entries "
+            f"(expected {expected}). Using {len(cols)} auto-detected cols instead.
+"
+            f"Auto cols: {cols}"
+        )
 
     X = feat_df[cols].values
 
@@ -391,13 +416,10 @@ def predict(model, pipeline, raw_df, seq_len=60):
 
     window = X[-seq_len:]
 
-    # Validate feature count matches scaler expectation
-    expected = getattr(pipeline.feature_scaler, "n_features_in_", None)
-    if expected and window.shape[1] != expected:
+    if window.shape[1] != expected:
         return None, None, (
-            f"Feature mismatch: data has {window.shape[1]} cols, "
-            f"scaler expects {expected}. "
-            f"pipeline.feature_columns has {len(pipeline.feature_columns)} entries."
+            f"Still mismatched after fallback: data={window.shape[1]}, "
+            f"scaler={expected}. Cols used: {cols}"
         )
 
     scaled = pipeline.feature_scaler.transform(window)
