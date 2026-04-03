@@ -4,6 +4,8 @@
 A production-ready Streamlit app for next-day S&P 500 direction prediction using a
 stacked LSTM with temporal attention trained on 38 years of daily OHLCV data.
 
+Dseployment: https://s-p-500-lstm-stock-predictor-xrtibnlqfxrrrxzgkrjjcu.streamlit.app/
+
 ---
 
 ## Project Structure
